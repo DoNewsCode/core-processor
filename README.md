@@ -14,9 +14,9 @@ import (
     "fmt"
     
     "github.com/DoNewsCode/core"
+    processor "github.com/DoNewsCode/core-processor"
     "github.com/DoNewsCode/core/di"
     "github.com/DoNewsCode/core/otkafka"
-    "github.com/DoNewsCode/core/otkafka/processor"
     "github.com/segmentio/kafka-go"
 )
 
@@ -57,7 +57,7 @@ func (h *Handler) Batch(ctx context.Context, data []interface{}) error {
 }
 
 func main() {
-	// prepare config and dependencies
+    // prepare config and dependencies
     c := core.New(
         core.WithInline("kafka.reader.default.brokers", []string{"127.0.0.1:9092"}),
         core.WithInline("kafka.reader.default.topic", "test"),
@@ -83,9 +83,7 @@ func main() {
 
 ```
 
-After the above, we just need to add  handlers and provide new methods for core. 
-We don't need to care about how to consume and transfer data.
-
-Processor provides a wealth of configuration to control consumption and deliver data logic. See `processor.Info`
+After the above, we just need to add  handlers and provide new methods for core.
+We can use `processor.Info` to flexibly adjust the operation of the processor.
 
 Have fun!
