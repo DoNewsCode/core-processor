@@ -1,0 +1,57 @@
+name: Go
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      matrix:
+        go-version: [1.15.x,1.16.x]
+    runs-on: ubuntu-latest
+    services:
+      zookeeper:
+        image: wurstmeister/zookeeper:latest
+        ports:
+          - 2181:2181
+      kafka:
+        image: wurstmeister/kafka:latest
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - uses: actions/cache@v2
+      id: cache-go-mod
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('go.mod') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}
+
+    - name: Environment Variables from Dotenv
+      uses: c-py/action-dotenv-to-setenv@v3
+
+    - name: Build
+      if: steps.cache-go-mod.outputs.cache-hit != 'true'
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v2
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: coverage.txt
