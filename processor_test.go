@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/DoNewsCode/core"
-	"github.com/DoNewsCode/core/di"
 	"github.com/DoNewsCode/core/otkafka"
 	"github.com/pkg/errors"
 	"github.com/segmentio/kafka-go"
@@ -204,16 +203,12 @@ func TestProcessor(t *testing.T) {
 		close(handlerD.data)
 	}()
 
-	c.Provide(di.Deps{
-		func() Out {
-			return NewOut(
-				handlerA,
-				handlerB,
-				handlerC,
-				handlerD,
-			)
-		},
-	})
+	c.Provide(Provides(
+		handlerA,
+		handlerB,
+		handlerC,
+		handlerD,
+	))
 	c.AddModuleFunc(New)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -252,13 +247,7 @@ func TestProcessorBatchInterval(t *testing.T) {
 		close(handler.data)
 	}()
 
-	c.Provide(di.Deps{
-		func() Out {
-			return NewOut(
-				handler,
-			)
-		},
-	})
+	c.Provide(Provides(handler))
 
 	c.AddModuleFunc(New)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -315,13 +304,7 @@ func TestProcessorBatchError(t *testing.T) {
 	defer func() {
 		close(handler.data)
 	}()
-	c.Provide(di.Deps{
-		func() Out {
-			return NewOut(
-				handler,
-			)
-		},
-	})
+	c.Provide(Provides(handler))
 
 	c.AddModuleFunc(New)
 

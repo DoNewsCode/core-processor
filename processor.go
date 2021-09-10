@@ -12,6 +12,14 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+func Provides(hs ...Handler) di.Deps {
+	return di.Deps{
+		func() []Handler {
+			return hs
+		},
+	}
+}
+
 // Processor dispatch Handler.
 type Processor struct {
 	maker    otkafka.ReaderMaker
@@ -43,7 +51,7 @@ type BatchFunc func(ctx context.Context, data []interface{}) error
 type in struct {
 	di.In
 
-	Handlers []Handler `group:"ProcessorHandler"`
+	Handlers []Handler
 	Maker    otkafka.ReaderMaker
 	Logger   log.Logger
 }
@@ -64,31 +72,6 @@ func New(i in) (*Processor, error) {
 		}
 	}
 	return e, nil
-}
-
-// Out to provide Handler to in.Handlers.
-type Out struct {
-	di.Out
-
-	Handlers []Handler `group:"ProcessorHandler,flatten"`
-}
-
-// NewOut create Out to provide Handler to in.Handlers.
-// 	Usage:
-// 		func newHandlerA(logger log.Logger) processor.Out {
-//			return processor.NewOut(
-//				&HandlerA{logger: logger},
-//			)
-//		}
-// 	Or
-// 		func newHandlers(logger log.Logger) processor.Out {
-//			return processor.NewOut(
-//				&HandlerA{logger: logger},
-//				&HandlerB{logger: logger},
-//			)
-//		}
-func NewOut(handlers ...Handler) Out {
-	return Out{Handlers: handlers}
 }
 
 // addHandler create handler and add to Processor.handlers
