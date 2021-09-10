@@ -20,3 +20,5 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	google.golang.org/genproto v0.0.0-20210909211513-a8c4777a87af // indirect
 )
+
+retract v0.1.0
