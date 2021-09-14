@@ -11,7 +11,7 @@ require (
 	github.com/knadh/koanf v1.2.2 // indirect
 	github.com/oklog/run v1.1.0
 	github.com/pkg/errors v0.9.1
-	github.com/segmentio/kafka-go v0.4.18
+	github.com/segmentio/kafka-go v0.4.19
 	github.com/spf13/cobra v1.2.1 // indirect
 	github.com/stretchr/testify v1.7.0
 	go.uber.org/dig v1.12.0 // indirect
