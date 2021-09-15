@@ -3,7 +3,7 @@ module github.com/DoNewsCode/core-processor
 go 1.16
 
 require (
-	github.com/DoNewsCode/core v0.9.1
+	github.com/DoNewsCode/core v0.9.2
 	github.com/Reasno/ifilter v0.1.5 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/go-kit/kit v0.11.0
