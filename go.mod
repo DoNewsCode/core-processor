@@ -8,7 +8,7 @@ require (
 	github.com/knadh/koanf v1.2.3 // indirect
 	github.com/oklog/run v1.1.0
 	github.com/pkg/errors v0.9.1
-	github.com/segmentio/kafka-go v0.4.22
+	github.com/segmentio/kafka-go v0.4.23
 	github.com/spf13/cobra v1.2.1 // indirect
 	github.com/stretchr/testify v1.7.0
 	google.golang.org/genproto v0.0.0-20210924002016-3dee208752a0 // indirect
