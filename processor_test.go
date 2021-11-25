@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func (h *testHandlerA) Info() *Info {
 	}
 }
 
-func (h *testHandlerA) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerA) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -38,7 +39,7 @@ func (h *testHandlerA) Handle(ctx context.Context, msg *kafka.Message) (interfac
 	return e, nil
 }
 
-func (h *testHandlerA) Batch(ctx context.Context, data []interface{}) error {
+func (h *testHandlerA) Batch(_ context.Context, data []interface{}) error {
 	for _, e := range data {
 		h.data <- e.(*testData)
 	}
@@ -56,7 +57,7 @@ func (h *testHandlerB) Info() *Info {
 	}
 }
 
-func (h *testHandlerB) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerB) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -64,7 +65,7 @@ func (h *testHandlerB) Handle(ctx context.Context, msg *kafka.Message) (interfac
 	return e, nil
 }
 
-func (h *testHandlerB) Batch(ctx context.Context, data []interface{}) error {
+func (h *testHandlerB) Batch(_ context.Context, data []interface{}) error {
 	for _, e := range data {
 		h.data <- e.(*testData)
 	}
@@ -82,7 +83,7 @@ func (h *testHandlerC) Info() *Info {
 	}
 }
 
-func (h *testHandlerC) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerC) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -102,7 +103,7 @@ func (h *testHandlerD) Info() *Info {
 	}
 }
 
-func (h *testHandlerD) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerD) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -123,7 +124,7 @@ func (h *testHandlerE) Info() *Info {
 	}
 }
 
-func (h *testHandlerE) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerE) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func (h *testHandlerE) Handle(ctx context.Context, msg *kafka.Message) (interfac
 	return e, nil
 }
 
-func (h *testHandlerE) Batch(ctx context.Context, data []interface{}) error {
+func (h *testHandlerE) Batch(_ context.Context, data []interface{}) error {
 	for _, e := range data {
 		h.data <- e.(*testData)
 	}
@@ -149,7 +150,7 @@ func (h *testHandlerF) Info() *Info {
 	}
 }
 
-func (h *testHandlerF) Handle(ctx context.Context, msg *kafka.Message) (interface{}, error) {
+func (h *testHandlerF) Handle(_ context.Context, msg *kafka.Message) (interface{}, error) {
 	e := &testData{}
 	if err := json.Unmarshal(msg.Value, &e); err != nil {
 		return nil, err
@@ -157,12 +158,16 @@ func (h *testHandlerF) Handle(ctx context.Context, msg *kafka.Message) (interfac
 	return e, nil
 }
 
-func (h *testHandlerF) Batch(ctx context.Context, data []interface{}) error {
-	return errors.New("test error")
+func (h *testHandlerF) Batch(_ context.Context, _ []interface{}) error {
+	return NewFatalErr(errors.New("test error"))
 }
 
 func TestProcessor(t *testing.T) {
 	t.Parallel()
+	if os.Getenv("KAFKA_ADDR") == "" {
+		t.Skip()
+	}
+
 	c := core.New(
 		core.WithInline("kafka.reader.A.brokers", envDefaultKafkaAddrs),
 		core.WithInline("kafka.reader.A.topic", testTopic),
@@ -220,18 +225,25 @@ func TestProcessor(t *testing.T) {
 
 	err := c.Serve(ctx)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-	assert.NotZero(t, len(handlerA.data))
-	assert.NotZero(t, len(handlerB.data))
-	assert.Equal(t, 0, len(handlerA.data)%3)
-	assert.Equal(t, 0, len(handlerB.data)%3)
+	if assert.NotZero(t, len(handlerA.data)) {
+		assert.Equal(t, 0, len(handlerA.data)%3)
+	}
+	if assert.NotZero(t, len(handlerB.data)) {
+		assert.Equal(t, 0, len(handlerB.data)%3)
+	}
 	assert.Equal(t, 4, len(handlerC.data))
 	assert.Equal(t, 4, len(handlerD.data))
 }
 
 func TestProcessorBatchInterval(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("KAFKA_ADDR") == "" {
+		t.Skip()
+	}
+
 	c := core.New(
 		core.WithInline("kafka.reader.default.brokers", envDefaultKafkaAddrs),
 		core.WithInline("kafka.reader.default.topic", testTopic),
@@ -296,6 +308,11 @@ func TestProcessorBatchInterval(t *testing.T) {
 
 func TestProcessorBatchError(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("KAFKA_ADDR") == "" {
+		t.Skip()
+	}
+
 	c := core.New(
 		core.WithInline("kafka.reader.default.brokers", envDefaultKafkaAddrs),
 		core.WithInline("kafka.reader.default.topic", testTopic),
@@ -329,6 +346,7 @@ func TestProcessorBatchError(t *testing.T) {
 	defer cancel()
 
 	err := c.Serve(ctx)
-	assert.Error(t, err)
-	assert.Equal(t, "test error", err.Error())
+	if assert.Error(t, err) {
+		assert.Equal(t, "test error", err.Error())
+	}
 }

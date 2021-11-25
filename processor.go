@@ -5,18 +5,20 @@ import (
 	"time"
 
 	"github.com/DoNewsCode/core/di"
+	"github.com/DoNewsCode/core/logging"
 	"github.com/DoNewsCode/core/otkafka"
 	"github.com/go-kit/log"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"github.com/segmentio/kafka-go"
+	"golang.org/x/sync/errgroup"
 )
 
 // Processor dispatch Handler.
 type Processor struct {
 	maker    otkafka.ReaderMaker
 	handlers []*handler
-	logger   log.Logger
+	logger   logging.LevelLogger
 }
 
 // Handler only include Info and Handle func.
@@ -52,7 +54,7 @@ type in struct {
 func New(i in) (*Processor, error) {
 	e := &Processor{
 		maker:    i.Maker,
-		logger:   i.Logger,
+		logger:   logging.WithLevel(i.Logger),
 		handlers: []*handler{},
 	}
 	if len(i.Handlers) == 0 {
@@ -108,10 +110,12 @@ func (e *Processor) addHandler(h Handler) error {
 		reader:     reader,
 		handleFunc: h.Handle,
 		info:       h.Info(),
+		logger:     e.logger,
 	}
 
 	batchHandler, isBatchHandler := h.(BatchHandler)
 	if isBatchHandler {
+		hd.hasBatch = true
 		hd.batchFunc = batchHandler.Batch
 		hd.batchCh = make(chan *batchInfo, h.Info().chanSize())
 		hd.ticker = time.NewTicker(h.Info().autoBatchInterval())
@@ -139,71 +143,61 @@ func (e *Processor) ProvideRunGroup(group *run.Group) {
 		return
 	}
 
-	var g run.Group
-
 	ctx, cancel := context.WithCancel(context.Background())
+	errorGroup, ctx := errgroup.WithContext(ctx)
 
 	for _, one := range e.handlers {
 		handler := one
 		for i := 0; i < handler.info.readWorker(); i++ {
-			g.Add(func() error {
+			errorGroup.Go(func() error {
 				return handler.read(ctx)
-			}, func(err error) {
-				cancel()
 			})
 		}
 
 		for i := 0; i < handler.info.handleWorker(); i++ {
-			g.Add(func() error {
+			errorGroup.Go(func() error {
 				return handler.handle(ctx)
-			}, func(err error) {
-				cancel()
 			})
 		}
 
 		if handler.batchFunc != nil {
 			for i := 0; i < handler.info.batchWorker(); i++ {
-				g.Add(func() error {
+				errorGroup.Go(func() error {
 					return handler.batch(ctx)
-				}, func(err error) {
-					cancel()
 				})
 			}
 		}
 	}
 
 	group.Add(func() error {
-		if err := g.Run(); err != nil {
-			return err
-		}
-		return nil
+		return errorGroup.Wait()
 	}, func(err error) {
 		cancel()
 	})
 
 }
 
-// ProvideCloser implements container.CloserProvider for the Module.
-func (e *Processor) ProvideCloser() {
-	for _, h := range e.handlers {
-		h.close()
-	}
-}
-
 // handler private processor
 // todo It's a bit messy
 type handler struct {
-	reader     *kafka.Reader
-	batchCh    chan *batchInfo
+	reader *kafka.Reader
+
 	msgCh      chan *kafka.Message
 	handleFunc HandleFunc
-	batchFunc  BatchFunc
-	info       *Info
-	ticker     *time.Ticker
+
+	batchCh   chan *batchInfo
+	batchFunc BatchFunc
+	hasBatch  bool
+
+	info   *Info
+	ticker *time.Ticker
+
+	logger logging.LevelLogger
 }
 
 // read fetch message from kafka
 func (h *handler) read(ctx context.Context) error {
+	defer close(h.msgCh)
 	for {
 		select {
 		default:
@@ -211,8 +205,10 @@ func (h *handler) read(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if len(message.Value) > 0 {
-				h.msgCh <- &message
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case h.msgCh <- &message:
 			}
 
 		case <-ctx.Done():
@@ -223,20 +219,33 @@ func (h *handler) read(ctx context.Context) error {
 
 // handle call Handler.Handle
 func (h *handler) handle(ctx context.Context) error {
+	defer func() {
+		if h.hasBatch {
+			close(h.batchCh)
+		}
+	}()
 	for {
 		select {
 		case msg := <-h.msgCh:
 			v, err := h.handleFunc(ctx, msg)
 			if err != nil {
-				return err
+				if IsFatalErr(err) {
+					return err
+				}
+				h.logger.Warn("action", "handle", "err", err)
 			}
-			if h.batchCh != nil {
-				h.batchCh <- &batchInfo{message: msg, data: v}
-			}
-			if h.batchFunc == nil {
+
+			if !h.hasBatch {
 				if err := h.commit(*msg); err != nil {
 					return err
 				}
+				continue
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case h.batchCh <- &batchInfo{message: msg, data: v}:
 			}
 		case <-ctx.Done():
 			return ctx.Err()
@@ -246,20 +255,10 @@ func (h *handler) handle(ctx context.Context) error {
 
 // batch Call BatchHandler.Batch and commit *kafka.Message.
 func (h *handler) batch(ctx context.Context) error {
+	defer h.ticker.Stop()
+
 	var data = make([]interface{}, 0)
 	var messages = make([]kafka.Message, 0)
-
-	appendData := func(d *batchInfo) {
-		if d == nil {
-			return
-		}
-		if d.message != nil {
-			messages = append(messages, *d.message)
-		}
-		if d.data != nil {
-			data = append(data, d.data)
-		}
-	}
 
 	doFunc := func() error {
 		if len(data) == 0 {
@@ -270,7 +269,10 @@ func (h *handler) batch(ctx context.Context) error {
 			messages = messages[0:0]
 		}()
 		if err := h.batchFunc(ctx, data); err != nil {
-			return err
+			if IsFatalErr(err) {
+				return err
+			}
+			h.logger.Warn("action", "batch", "err", err)
 		}
 
 		if err := h.commit(messages...); err != nil {
@@ -282,13 +284,22 @@ func (h *handler) batch(ctx context.Context) error {
 	for {
 		select {
 		case v := <-h.batchCh:
-			appendData(v)
+			if v == nil {
+				continue
+			}
+			if v.message != nil {
+				messages = append(messages, *v.message)
+			}
+			if v.data != nil {
+				data = append(data, v.data)
+			}
 			if len(data) < h.info.batchSize() {
 				continue
 			}
 			if err := doFunc(); err != nil {
 				return err
 			}
+			h.ticker.Reset(h.info.autoBatchInterval())
 		case <-h.ticker.C:
 			if err := doFunc(); err != nil {
 				return err
@@ -296,18 +307,6 @@ func (h *handler) batch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}
-}
-
-func (h *handler) close() {
-	if h.msgCh != nil {
-		close(h.msgCh)
-	}
-	if h.batchCh != nil {
-		close(h.batchCh)
-	}
-	if h.ticker != nil {
-		h.ticker.Stop()
 	}
 }
 

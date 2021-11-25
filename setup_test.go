@@ -20,15 +20,12 @@ var testTopic = "processor-test"
 
 func TestMain(m *testing.M) {
 	v := os.Getenv("KAFKA_ADDR")
-	if v == "" {
-		fmt.Println("Set env KAFKA_ADDR to run processor tests")
-		os.Exit(0)
+	if v != "" {
+		envDefaultKafkaAddrs = strings.Split(v, ",")
+		setupTopic()
+		setupMessage()
+		time.Sleep(1 * time.Second)
 	}
-	envDefaultKafkaAddrs = strings.Split(v, ",")
-	setupTopic()
-	setupMessage()
-
-	time.Sleep(1 * time.Second)
 
 	os.Exit(m.Run())
 }
