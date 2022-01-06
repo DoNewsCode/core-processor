@@ -257,8 +257,8 @@ func (h *handler) handle(ctx context.Context) error {
 func (h *handler) batch(ctx context.Context) error {
 	defer h.ticker.Stop()
 
-	var data = make([]interface{}, 0)
-	var messages = make([]kafka.Message, 0)
+	var data = make([]interface{}, 0, h.info.batchSize())
+	var messages = make([]kafka.Message, 0, h.info.batchSize())
 
 	doFunc := func() error {
 		if len(data) == 0 {
