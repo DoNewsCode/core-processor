@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/DoNewsCode/core/di"
@@ -105,12 +106,21 @@ func (e *Processor) addHandler(h Handler) error {
 		return errors.New("kafka reader must set consume group")
 	}
 
+	closeMsgOnce := sync.Once{}
 	var hd = &handler{
 		msgCh:      make(chan *kafka.Message, h.Info().chanSize()),
 		reader:     reader,
 		handleFunc: h.Handle,
 		info:       h.Info(),
 		logger:     e.logger,
+		closeBatchCh: func() {
+
+		},
+	}
+	hd.closeMsgCh = func() {
+		closeMsgOnce.Do(func() {
+			close(hd.msgCh)
+		})
 	}
 
 	batchHandler, isBatchHandler := h.(BatchHandler)
@@ -119,6 +129,12 @@ func (e *Processor) addHandler(h Handler) error {
 		hd.batchFunc = batchHandler.Batch
 		hd.batchCh = make(chan *batchInfo, h.Info().chanSize())
 		hd.ticker = time.NewTicker(h.Info().autoBatchInterval())
+		closeBatchOnce := sync.Once{}
+		hd.closeBatchCh = func() {
+			closeBatchOnce.Do(func() {
+				close(hd.batchCh)
+			})
+		}
 	}
 
 	e.handlers = append(e.handlers, hd)
@@ -193,11 +209,14 @@ type handler struct {
 	ticker *time.Ticker
 
 	logger logging.LevelLogger
+
+	closeMsgCh   func()
+	closeBatchCh func()
 }
 
 // read fetch message from kafka
 func (h *handler) read(ctx context.Context) error {
-	defer close(h.msgCh)
+	defer h.closeMsgCh()
 	for {
 		select {
 		default:
@@ -219,11 +238,7 @@ func (h *handler) read(ctx context.Context) error {
 
 // handle call Handler.Handle
 func (h *handler) handle(ctx context.Context) error {
-	defer func() {
-		if h.hasBatch {
-			close(h.batchCh)
-		}
-	}()
+	defer h.closeBatchCh()
 	for {
 		select {
 		case msg := <-h.msgCh:

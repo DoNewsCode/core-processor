@@ -26,8 +26,10 @@ type testHandlerA struct {
 
 func (h *testHandlerA) Info() *Info {
 	return &Info{
-		Name:      "A",
-		BatchSize: 3,
+		Name:        "A",
+		BatchSize:   3,
+		ReadWorker:  2,
+		BatchWorker: 2,
 	}
 }
 
