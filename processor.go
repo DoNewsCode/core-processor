@@ -279,10 +279,6 @@ func (h *handler) batch(ctx context.Context) error {
 		if len(data) == 0 {
 			return nil
 		}
-		defer func() {
-			data = data[0:0]
-			messages = messages[0:0]
-		}()
 		if err := h.batchFunc(ctx, data); err != nil {
 			if IsFatalErr(err) {
 				return err
@@ -293,6 +289,9 @@ func (h *handler) batch(ctx context.Context) error {
 		if err := h.commit(messages...); err != nil {
 			return err
 		}
+		data = data[0:0]
+		messages = messages[0:0]
+		h.ticker.Reset(h.info.autoBatchInterval())
 		return nil
 	}
 
@@ -314,7 +313,6 @@ func (h *handler) batch(ctx context.Context) error {
 			if err := doFunc(); err != nil {
 				return err
 			}
-			h.ticker.Reset(h.info.autoBatchInterval())
 		case <-h.ticker.C:
 			if err := doFunc(); err != nil {
 				return err
