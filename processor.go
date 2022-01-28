@@ -250,7 +250,7 @@ func (h *handler) handle(ctx context.Context) error {
 				h.logger.Warn("action", "handle", "err", err)
 			}
 
-			if !h.hasBatch {
+			if !h.hasBatch || v == nil {
 				if err := h.commit(*msg); err != nil {
 					return err
 				}
