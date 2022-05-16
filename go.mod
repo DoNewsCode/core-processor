@@ -15,7 +15,7 @@ require (
 )
 
 require (
-	github.com/go-kit/log v0.2.0
+	github.com/go-kit/log v0.2.1
 	google.golang.org/grpc v1.43.0 // indirect
 )
 
