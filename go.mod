@@ -19,7 +19,7 @@ require (
 	google.golang.org/grpc v1.43.0 // indirect
 )
 
-require golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+require golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
