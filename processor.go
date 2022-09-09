@@ -2,16 +2,15 @@ package processor
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
+	"github.com/DoNewsCode/core/contract"
 	"github.com/DoNewsCode/core/di"
 	"github.com/DoNewsCode/core/logging"
 	"github.com/DoNewsCode/core/otkafka"
 	"github.com/go-kit/log"
 	"github.com/oklog/run"
-	"github.com/pkg/errors"
-	"github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -20,314 +19,163 @@ type Processor struct {
 	maker    otkafka.ReaderMaker
 	handlers []*handler
 	logger   logging.LevelLogger
+	config   contract.ConfigUnmarshaler
+
+	eg     *errgroup.Group
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// cant add duplicate processor with same name
+	set map[string]struct{}
 }
-
-// Handler only include Info and Handle func.
-type Handler interface {
-	// Info set the topic name and some config.
-	Info() *Info
-	// Handle for *kafka.Message.
-	Handle(ctx context.Context, msg *kafka.Message) (interface{}, error)
-}
-
-// BatchHandler one more Batch method than Handler.
-type BatchHandler interface {
-	Handler
-	// Batch processing the results returned by Handler.Handle.
-	Batch(ctx context.Context, data []interface{}) error
-}
-
-// HandleFunc type for Handler.Handle Func.
-type HandleFunc func(ctx context.Context, msg *kafka.Message) (interface{}, error)
-
-// BatchFunc type for BatchHandler.Batch Func.
-type BatchFunc func(ctx context.Context, data []interface{}) error
 
 type in struct {
 	di.In
 
-	Handlers []Handler `group:"ProcessorHandler"`
-	Maker    otkafka.ReaderMaker
-	Logger   log.Logger
+	Maker     otkafka.ReaderMaker
+	Logger    log.Logger
+	Container contract.Container
+	Config    contract.ConfigUnmarshaler
+}
+
+// provider provides Processor.
+type provider interface {
+	ProvideProcessor(p *Processor)
 }
 
 // New create *Processor Module.
 func New(i in) (*Processor, error) {
 	e := &Processor{
 		maker:    i.Maker,
-		logger:   logging.WithLevel(i.Logger),
+		logger:   logging.WithLevel(log.With(i.Logger, "module", "processor")),
 		handlers: []*handler{},
+		config:   i.Config,
+		set:      map[string]struct{}{},
 	}
-	if len(i.Handlers) == 0 {
-		return nil, errors.New("empty handler list")
-	}
-	for _, hh := range i.Handlers {
-		if err := e.addHandler(hh); err != nil {
-			return nil, err
-		}
-	}
+
+	applyHandler(i.Container, e)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errorGroup, ctx := errgroup.WithContext(ctx)
+
+	e.ctx = ctx
+	e.cancel = cancel
+	e.eg = errorGroup
+
 	return e, nil
 }
 
-// Out to provide Handler to in.Handlers.
-type Out struct {
-	di.Out
-
-	Handlers []Handler `group:"ProcessorHandler,flatten"`
-}
-
-// NewOut create Out to provide Handler to in.Handlers.
-// 	Usage:
-// 		func newHandlerA(logger log.Logger) processor.Out {
-//			return processor.NewOut(
-//				&HandlerA{logger: logger},
-//			)
-//		}
-// 	Or
-// 		func newHandlers(logger log.Logger) processor.Out {
-//			return processor.NewOut(
-//				&HandlerA{logger: logger},
-//				&HandlerB{logger: logger},
-//			)
-//		}
-func NewOut(handlers ...Handler) Out {
-	return Out{Handlers: handlers}
-}
-
-// addHandler create handler and add to Processor.handlers
-func (e *Processor) addHandler(h Handler) error {
-	name := h.Info().name()
-	reader, err := e.maker.Make(name)
+// newHandler create handler and add to Processor.handlers
+func (p *Processor) newHandler(h Handler, batch bool) (*handler, error) {
+	name := "default"
+	if h.Name() != "" {
+		name = h.Name()
+	}
+	if _, ok := p.set[name]; ok {
+		return nil, fmt.Errorf("duplicate processor name: %s", name)
+	}
+	p.set[name] = struct{}{}
+	var opt = options{
+		Name:              name,
+		BatchWorker:       1,
+		BatchSize:         1,
+		HandleWorker:      1,
+		AutoBatchInterval: time.Minute,
+		AutoCommit:        false,
+	}
+	if err := p.config.Unmarshal("processor."+name, &opt); err != nil {
+		p.logger.Warnf("load %s options error: %v and using default options", name, err)
+	}
+	reader, err := p.maker.Make(name)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("get reader %s error: %w", name, err)
 	}
 
 	if reader.Config().GroupID == "" {
-		return errors.New("kafka reader must set consume group")
+		return nil, fmt.Errorf("reader %s did not set consumer group id", name)
 	}
 
-	closeMsgOnce := sync.Once{}
 	var hd = &handler{
-		msgCh:      make(chan *kafka.Message, h.Info().chanSize()),
 		reader:     reader,
+		options:    &opt,
+		logger:     logging.WithLevel(log.With(p.logger, "handler", name)),
 		handleFunc: h.Handle,
-		info:       h.Info(),
-		logger:     e.logger,
-		closeBatchCh: func() {
-
-		},
-	}
-	hd.closeMsgCh = func() {
-		closeMsgOnce.Do(func() {
-			close(hd.msgCh)
-		})
 	}
 
-	batchHandler, isBatchHandler := h.(BatchHandler)
-	if isBatchHandler {
-		hd.hasBatch = true
-		hd.batchFunc = batchHandler.Batch
-		hd.batchCh = make(chan *batchInfo, h.Info().chanSize())
-		hd.ticker = time.NewTicker(h.Info().autoBatchInterval())
-		closeBatchOnce := sync.Once{}
-		hd.closeBatchCh = func() {
-			closeBatchOnce.Do(func() {
-				close(hd.batchCh)
-			})
-		}
+	if bf, ok := h.(BatchHandler); ok || batch {
+		hd.batchFunc = bf.Batch
+		hd.batchCh = make(chan *batchInfo)
 	}
-
-	e.handlers = append(e.handlers, hd)
-
-	return nil
+	return hd, nil
 }
 
-// batchInfo data is the result of message processed by Handler.Handle.
-//
-// When BatchHandler.Batch is successfully called, then commit the message.
-type batchInfo struct {
-	message *kafka.Message
-	data    interface{}
+func applyHandler(ctn contract.Container, pp *Processor) {
+	modules := ctn.Modules()
+	for i := range modules {
+		if p, ok := modules[i].(provider); ok {
+			p.ProvideProcessor(pp)
+		}
+	}
 }
 
 // ProvideRunGroup run workers:
 // 	1. Fetch message from *kafka.Reader.
 // 	2. Handle message by Handler.Handle.
 // 	3. Batch data by BatchHandler.Batch. If batch success then commit message.
-func (e *Processor) ProvideRunGroup(group *run.Group) {
-	if len(e.handlers) == 0 {
-		return
+func (p *Processor) ProvideRunGroup(group *run.Group) {
+	for _, h := range p.handlers {
+		p.run(h)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errorGroup, ctx := errgroup.WithContext(ctx)
-
-	for _, one := range e.handlers {
-		handler := one
-		for i := 0; i < handler.info.readWorker(); i++ {
-			errorGroup.Go(func() error {
-				return handler.read(ctx)
-			})
-		}
-
-		for i := 0; i < handler.info.handleWorker(); i++ {
-			errorGroup.Go(func() error {
-				return handler.handle(ctx)
-			})
-		}
-
-		if handler.batchFunc != nil {
-			for i := 0; i < handler.info.batchWorker(); i++ {
-				errorGroup.Go(func() error {
-					return handler.batch(ctx)
-				})
-			}
-		}
-	}
-
-	group.Add(func() error {
-		return errorGroup.Wait()
-	}, func(err error) {
-		cancel()
+	p.eg.Go(func() error {
+		<-p.ctx.Done()
+		return p.ctx.Err()
 	})
 
+	group.Add(func() error {
+		return p.eg.Wait()
+	}, func(err error) {
+		p.cancel()
+	})
 }
 
-// handler private processor
-// todo It's a bit messy
-type handler struct {
-	reader *kafka.Reader
-
-	msgCh      chan *kafka.Message
-	handleFunc HandleFunc
-
-	batchCh   chan *batchInfo
-	batchFunc BatchFunc
-	hasBatch  bool
-
-	info   *Info
-	ticker *time.Ticker
-
-	logger logging.LevelLogger
-
-	closeMsgCh   func()
-	closeBatchCh func()
-}
-
-// read fetch message from kafka
-func (h *handler) read(ctx context.Context) error {
-	defer h.closeMsgCh()
-	for {
-		select {
-		default:
-			message, err := h.reader.FetchMessage(ctx)
-			if err != nil {
-				return err
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case h.msgCh <- &message:
-			}
-
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-// handle call Handler.Handle
-func (h *handler) handle(ctx context.Context) error {
-	defer h.closeBatchCh()
-	for {
-		select {
-		case msg := <-h.msgCh:
-			v, err := h.handleFunc(ctx, msg)
-			if err != nil {
-				if IsFatalErr(err) {
-					return err
-				}
-				h.logger.Warn("action", "handle", "err", err)
-			}
-
-			if !h.hasBatch || v == nil {
-				if err := h.commit(*msg); err != nil {
-					return err
-				}
-				continue
-			}
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case h.batchCh <- &batchInfo{message: msg, data: v}:
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-// batch Call BatchHandler.Batch and commit *kafka.Message.
-func (h *handler) batch(ctx context.Context) error {
-	defer h.ticker.Stop()
-
-	var data = make([]interface{}, 0, h.info.batchSize())
-	var messages = make([]kafka.Message, 0, h.info.batchSize())
-
-	doFunc := func() error {
-		if len(data) == 0 {
-			return nil
-		}
-		if err := h.batchFunc(ctx, data); err != nil {
-			if IsFatalErr(err) {
-				return err
-			}
-			h.logger.Warn("action", "batch", "err", err)
-		}
-
-		if err := h.commit(messages...); err != nil {
+// AddHandler add Handler to Processor.handlers
+func (p *Processor) AddHandler(hs ...Handler) error {
+	for _, hh := range hs {
+		hd, err := p.newHandler(hh, false)
+		if err != nil {
 			return err
 		}
-		data = data[0:0]
-		messages = messages[0:0]
-		h.ticker.Reset(h.info.autoBatchInterval())
-		return nil
-	}
-
-	for {
-		select {
-		case v := <-h.batchCh:
-			if v == nil {
-				continue
-			}
-			if v.message != nil {
-				messages = append(messages, *v.message)
-			}
-			if v.data != nil {
-				data = append(data, v.data)
-			}
-			if len(data) < h.info.batchSize() {
-				continue
-			}
-			if err := doFunc(); err != nil {
-				return err
-			}
-		case <-h.ticker.C:
-			if err := doFunc(); err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-func (h *handler) commit(messages ...kafka.Message) error {
-	if len(messages) > 0 {
-		if err := h.reader.CommitMessages(context.Background(), messages...); err != nil {
-			return err
-		}
+		p.handlers = append(p.handlers, hd)
 	}
 	return nil
+}
+
+// AddHandlerFunc add functions of Handler to Processor.handlers
+func (p *Processor) AddHandlerFunc(name string, hf HandleFunc, bf BatchFunc) error {
+	hd, err := p.newHandler(&wrapHandler{
+		name: name,
+		hf:   hf,
+		bf:   bf,
+	}, bf != nil)
+	if err != nil {
+		return err
+	}
+	p.handlers = append(p.handlers, hd)
+	return nil
+}
+
+func (p *Processor) run(h *handler) {
+	for i := 0; i < h.options.HandleWorker; i++ {
+		p.eg.Go(func() error {
+			return h.handle(p.ctx)
+		})
+	}
+
+	if h.batchFunc != nil {
+		for i := 0; i < h.options.BatchWorker; i++ {
+			p.eg.Go(func() error {
+				return h.batch(p.ctx)
+			})
+		}
+	}
 }

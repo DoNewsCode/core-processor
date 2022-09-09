@@ -58,9 +58,10 @@ func setupTopic() {
 		}
 	}
 	err = controllerConn.DeleteTopics(topics...)
-	if err == nil {
-		time.Sleep(2 * time.Second)
+	if err != nil {
+		panic(err.Error())
 	}
+	time.Sleep(1 * time.Second)
 
 	err = controllerConn.CreateTopics(topicConfigs...)
 
