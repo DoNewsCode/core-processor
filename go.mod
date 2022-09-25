@@ -1,6 +1,6 @@
 module github.com/DoNewsCode/core-processor
 
-go 1.17
+go 1.19
 
 require (
 	github.com/DoNewsCode/core v0.11.1
