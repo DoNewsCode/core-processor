@@ -10,7 +10,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/segmentio/kafka-go v0.4.26
 	github.com/spf13/cobra v1.3.0 // indirect
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.9.0
 	google.golang.org/genproto v0.0.0-20220112215332-a9c7c0acf9f2 // indirect
 )
 
@@ -44,7 +44,7 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 retract v0.1.0
