@@ -6,7 +6,7 @@ require (
 	github.com/DoNewsCode/core v0.11.1
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/knadh/koanf v1.4.0 // indirect
-	github.com/oklog/run v1.1.0
+	github.com/oklog/run v1.2.0
 	github.com/pkg/errors v0.9.1
 	github.com/segmentio/kafka-go v0.4.26
 	github.com/spf13/cobra v1.3.0 // indirect
