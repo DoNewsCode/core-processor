@@ -1,6 +1,6 @@
 module github.com/DoNewsCode/core-processor
 
-go 1.17
+go 1.25.0
 
 require (
 	github.com/DoNewsCode/core v0.11.1
@@ -19,7 +19,7 @@ require (
 	google.golang.org/grpc v1.43.0 // indirect
 )
 
-require golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+require golang.org/x/sync v0.22.0
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
